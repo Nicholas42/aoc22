@@ -17,14 +17,8 @@ readRucksack line = do
   uncurry Rucksack $ splitAt halfway line
 
 readElves :: [String] -> [Elves]
-readElves (x:y:z:rest) = [Elves x y z] ++ (readElves rest)
-readElves _ = []
-
-readInput :: IO [Rucksack]
-readInput = fmap ((map readRucksack) . lines) $ readFile "inputs/dec03.txt"
-
-readInput2 :: IO [Elves]
-readInput2 = fmap (readElves . lines) $ readFile "inputs/dec03.txt"
+readElves (x:y:z:rest) = (Elves x y z):readElves rest
+readElves [] = []
 
 findDuplicate :: Rucksack -> Char
 findDuplicate (Rucksack (a:lice) bert)
@@ -33,8 +27,8 @@ findDuplicate (Rucksack (a:lice) bert)
 
 priority :: Char -> Int
 priority c
-  | 'a' <= c && c <= 'z' = (ord c) - (ord 'a') + 1
-  | 'A' <= c && c <= 'Z' = (ord c) - (ord 'A') + 27
+  | 'a' <= c && c <= 'z' = ord c - ord 'a' + 1
+  | 'A' <= c && c <= 'Z' = ord c - ord 'A' + 27
 
 findTriplicate :: Elves -> Char
 findTriplicate (Elves (a:lice) bert carrol)
@@ -43,7 +37,7 @@ findTriplicate (Elves (a:lice) bert carrol)
 
 run :: IO ()
 run = do
-  inputLines <- fmap lines $ readFile "inputs/dec03.txt"
+  inputLines <- lines <$> readFile "inputs/dec03.txt"
   let input = map readRucksack inputLines
   let input2 = readElves inputLines
   print $ sum $ map (priority . findDuplicate) input

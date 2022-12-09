@@ -32,14 +32,13 @@ replaceElem index elem list =
 
 applySingleMove :: Move -> [[Char]] -> [[Char]]
 applySingleMove (Move _ from to) stacks = do
-  let moved = head $ stacks !! from
-  let movedFrom = tail $ stacks !! from
-  let movedTo = moved : (stacks !! to)
-  replaceElem from movedFrom $ replaceElem to movedTo stacks
+  let fromStack = stacks !! from
+  let movedTo = head fromStack : stacks !! to
+  replaceElem from (tail fromStack) $ replaceElem to movedTo stacks
 
 applyMove :: [[Char]] -> Move -> [[Char]]
 applyMove stacks move = do
-  iterate (applySingleMove move) stacks !! (number move)
+  iterate (applySingleMove move) stacks !! number move
 
 applyMove2 :: [[Char]] -> Move -> [[Char]]
 applyMove2 stacks (Move number from to) = do
@@ -51,8 +50,7 @@ applyMove2 stacks (Move number from to) = do
 
 run :: IO ()
 run = do
-  input <- readFile "inputs/dec05.txt"
-  let (moveString, stackString) = splitInput input
+  (moveString, stackString) <- splitInput <$> readFile "inputs/dec05.txt"
   let moves = map readMove moveString
   let stacks = readStacks stackString
   let finalStacks = foldl applyMove stacks moves

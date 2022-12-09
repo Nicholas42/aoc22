@@ -11,8 +11,7 @@ sumHelper [] accu = [accu]
 
 run :: IO ()
 run = do
-  content <- readFile "inputs/dec01.txt"
-  let packs = sumHelper (lines content) 0
-  let sorted = reverse $ sort packs
+  content <- lines <$> readFile "inputs/dec01.txt"
+  let sorted = reverse $ sort $ sumHelper content 0 
   print $ head sorted
   print $ sum $ take 3 sorted

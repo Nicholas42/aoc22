@@ -74,7 +74,7 @@ playValue (Round _ x) =
 
 run :: IO ()
 run = do
-  inputLines <- fmap lines $ readFile "inputs/dec02.txt" 
+  inputLines <- lines <$> readFile "inputs/dec02.txt"
   let input = map readRound inputLines
   let input2 = map readRound2 inputLines
   print $ evalRounds input

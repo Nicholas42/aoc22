@@ -10,16 +10,20 @@ data ElvePair =
   ElvePair Range Range
   deriving (Show)
 
+readRange :: String -> (Range, String)
+readRange line = do 
+  let (a, as) = head $ reads line
+  let (b, bs) = head $ reads $ tail as
+  (Range a b, bs)
+    
 readPair :: String -> ElvePair
 readPair line = do
-  let [(a, as)] = reads line
-  let [(b, bs)] = reads $ tail as
-  let [(c, cs)] = reads $ tail bs
-  let [(d, _)] = reads $ tail cs
-  ElvePair (Range a b) (Range c d)
+  let (arange, rest) = readRange line
+  let (brange, _) = readRange $ tail rest
+  ElvePair arange brange
 
 readInput :: IO [ElvePair]
-readInput = fmap ((map readPair) . lines) $ readFile "inputs/dec04.txt"
+readInput = map readPair <$> lines <$> readFile "inputs/dec04.txt"
 
 contained :: ElvePair -> Bool
 contained (ElvePair (Range down up) (Range strange charm))
