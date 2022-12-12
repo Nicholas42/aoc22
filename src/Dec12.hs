@@ -5,10 +5,11 @@ module Dec12
 import Control.Monad.State
 import qualified Data.Map as M
 import Data.Map ((!))
-import qualified Data.Sequence as S
-import Data.Sequence ((<|), (><), (|>))
+import Data.Maybe (catMaybes)
+import qualified Data.Sequence as Seq
+import Data.Sequence (ViewL((:<)), (><))
+import qualified Data.Set as Set
 import Debug.Trace
-import Data.Maybe (mapMaybe)
 
 data Position =
   Position
@@ -17,12 +18,6 @@ data Position =
     }
   deriving (Show, Eq, Ord)
 
-type Map = M.Map Position Char
-
-type VisitorMap = M.Map Position Bool
-
-type DistanceMap = M.Map Position Int
-
 data Edge =
   Edge
     { from :: Maybe Position
@@ -30,17 +25,21 @@ data Edge =
     }
   deriving (Show)
 
-data MapData =
-  MapData
-    { mapp :: Map
-    , distances :: DistanceMap
-    , visitors :: VisitorMap
-    , frontier :: S.Seq Edge
-    , end :: Position
-    }
+type Map = M.Map Position Char
 
-highest :: Char
-highest = succ $ succ 'z'
+type VisitorSet = Set.Set Position
+
+type DistanceMap = M.Map Position Int
+
+type Frontier = Seq.Seq Edge
+
+data Searcher =
+  Searcher
+    { sMap :: Map
+    , sDistances :: DistanceMap
+    , sVisited :: VisitorSet
+    , sFrontier :: Frontier
+    }
 
 enumerate :: [a] -> [(Int, a)]
 enumerate = zip [0 ..]
@@ -51,87 +50,71 @@ readMapLine line y = M.fromList [(Position x y, c) | (x, c) <- enumerate line]
 readMap :: [String] -> Map
 readMap lines = M.unions [readMapLine line y | (y, line) <- enumerate lines]
 
-visitorMap :: Map -> VisitorMap
-visitorMap = M.map (const False)
-
-findStartAndEnd :: Map -> MapData
-findStartAndEnd mappy = do
-  let [(startPos, _)] = M.toList $ M.filter (== 'S') mappy
-  let [(endPos, _)] = M.toList $ M.filter (== 'E') mappy
+initSearcher :: Map -> (Position, Searcher)
+initSearcher mappy = do
+  let startPos = head $ M.keys $ M.filter (== 'S') mappy
+  let endPos = head $ M.keys $ M.filter (== 'E') mappy
   let newMap = M.insert startPos 'a' $ M.insert endPos 'z' mappy
-  let visitors = visitorMap mappy
-  let distances = M.empty
-  let front = S.singleton (Edge Nothing startPos)
-  MapData newMap distances visitors front endPos
-
-startAt :: MapData -> Position -> MapData
-startAt dat pos = dat {frontier = S.singleton (Edge Nothing pos)}
+  let frontier = Seq.singleton $ Edge Nothing endPos
+  (startPos, Searcher newMap M.empty Set.empty frontier)
 
 neighborPos :: Position -> [Position]
 neighborPos (Position x y) =
-  map (uncurry Position) [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+  [Position (x + dx) (y + dy) | (dx, dy) <- [(1, 0), (-1, 0), (0, 1), (0, -1)]]
 
-findNeighbors :: Map -> Position -> [Position]
-findNeighbors mapp pos =
-  filter (\k -> (M.findWithDefault highest k mapp) <= limit) $ neighborPos pos
+findCanReachMe :: Map -> Position -> [Position]
+findCanReachMe mapp pos =
+  [p | p <- neighborPos pos, maybe False limitP $ M.lookup p mapp]
   where
-    limit = succ $ mapp ! pos
+    limitP = (>= (pred $ mapp ! pos))
 
-distUpdate :: Int -> Maybe Int -> Maybe Int
-distUpdate x Nothing = Just x
-distUpdate x (Just y) = Just $ min x y
+visit :: Edge -> State Searcher ()
+visit Edge {to = pos} =
+  modify $ \d -> d {sVisited = Set.insert pos $ sVisited d}
 
-visit :: VisitorMap -> Position -> VisitorMap
-visit visitors pos = M.insert pos True visitors
+updateDistances :: Edge -> State Searcher ()
+updateDistances (Edge Nothing to) =
+  modify $ \d -> d {sDistances = M.insert to 0 $ sDistances d}
+updateDistances (Edge (Just from) to) =
+  modify $ \d@Searcher {sDistances = dist} ->
+    d {sDistances = M.insertWith min to (succ $ dist ! from) dist}
 
-updateDistances :: DistanceMap -> Edge -> DistanceMap
-updateDistances distances (Edge Nothing to) = M.insert to 0 distances
-updateDistances distances (Edge (Just from) to) =
-  M.alter (distUpdate $ succ $ distances ! from) to distances
+edgesFrom :: Position -> [Position] -> Frontier
+edgesFrom from tos = Seq.fromList $ map (Edge (Just from)) tos
 
-bfs :: State MapData ()
+searchFrom :: Edge -> State Searcher ()
+searchFrom cur@Edge {to = to} = do
+  visit cur
+  updateDistances cur
+  modify $ \d@Searcher {sFrontier = frontier, sMap = mappy} ->
+    d {sFrontier = frontier >< (edgesFrom to $ findCanReachMe mappy to)}
+
+bfs :: State Searcher ()
 bfs = do
-  dat <- get
-  if S.null $ frontier dat
+  Searcher {sFrontier = frontier, sVisited = visited} <- get
+  let cur :< front = Seq.viewl frontier
+  modify $ \d -> d {sFrontier = front}
+  if Set.member (to cur) visited
     then return ()
-    else do
-      let front = S.drop 1 $ frontier dat
-      let cur = S.index (frontier dat) 0
-      put dat {frontier = front}
-      if (visitors dat) ! (to cur)
-        then return ()
-        else do
-          let visited = visit (visitors dat) (to cur)
-          let distanced = updateDistances (distances dat) cur
-          let toVisit =
-                S.fromList
-                  [ Edge (Just $ to cur) n
-                  | n <- findNeighbors (mapp dat) (to cur)
-                  ]
-          put
-            dat
-              { visitors = visited
-              , distances = distanced
-              , frontier = front >< toVisit
-              }
+    else searchFrom cur
 
-runBfs :: State MapData (Maybe Int)
-runBfs = do
-  dat <- get
-  let atEnd = \m -> m ! (end dat)
-  if atEnd (visitors dat)
-    then return $ Just $ atEnd $ distances dat
-    else do 
-        if S.null (frontier dat) then return Nothing else bfs >> runBfs
+runBfs :: Set.Set Position -> State Searcher Int
+runBfs toSearch = do
+  Searcher {sVisited = visited, sFrontier = frontier, sDistances = dist} <- get
+  let found = Set.intersection toSearch visited
+  if Set.null found
+    then do
+      if Seq.null frontier
+        then error "Cannot reach any target"
+        else bfs >> runBfs toSearch
+    else return $ minimum $ Set.map ((!) dist) found
 
-multiSourceBfs :: MapData -> Int
-multiSourceBfs dat = do
-  let sources = M.keys $ M.filter (== 'a') $ mapp dat
-  minimum $ mapMaybe (\s -> evalState runBfs $ startAt dat s) sources
+allLows :: Searcher -> Set.Set Position
+allLows dat = M.keysSet $ M.filter (== 'a') $ sMap dat
 
 run :: IO ()
 run = do
   input <- readMap <$> lines <$> readFile "inputs/dec12.txt"
-  let dat = findStartAndEnd input
-  print $ evalState runBfs dat
-  print $ multiSourceBfs dat
+  let (start, dat) = initSearcher input
+  print $ evalState (runBfs $ Set.singleton start) dat
+  print $ evalState (runBfs $ allLows dat) dat
