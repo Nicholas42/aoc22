@@ -5,7 +5,7 @@ module Dec13
   ) where
 
 import qualified Data.Aeson as A
-import qualified Data.ByteString.Lazy as BS
+import qualified Data.ByteString.Lazy.Char8 as BS (pack)
 import Data.List (sortBy, findIndices)
 import Data.Maybe
 import Data.Text (Text)
@@ -14,12 +14,13 @@ import qualified Data.Vector as V
 index :: [a] -> [(Int, a)]
 index = zip [1 ..]
 
-readInput :: [BS.ByteString] -> [(A.Value, A.Value)]
+readInput :: [String] -> [(A.Value, A.Value)]
 readInput [] = []
 readInput ("":rest) = readInput rest
 readInput (l:i:sts) = (readLine l, readLine i) : (readInput sts)
   where
-    readLine x = fromJust (A.decode x :: Maybe A.Value)
+    readLine :: String -> A.Value
+    readLine x = fromJust (A.decode (BS.pack x) :: Maybe A.Value)
 
 compareL :: A.Array -> A.Array -> Ordering
 compareL left right
@@ -60,7 +61,6 @@ value list =  product $ map (1+) $ findIndices (\x -> x == divider1 || x== divid
 
 run :: IO ()
 run = do
-  input <- readInput <$> BS.split 10 <$> BS.readFile "inputs/dec13.txt"
+  input <- readInput <$> lines <$> readFile "inputs/dec13.txt"
   print $ sum $ map computeResult $ index input
-  let sorted = sortBy compareV $ joinList input
-  print $ value sorted
+  print $ value $ sortBy compareV $ joinList input
