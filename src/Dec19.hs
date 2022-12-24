@@ -5,10 +5,14 @@ module Dec19
   ) where
 
 import Control.Applicative ((*>), (<*), (<|>))
+import Control.Monad.State
+import Control.Parallel.Strategies
 import qualified Data.Attoparsec.Text as AP
+import Data.Function (on)
 import qualified Data.List as L
 import qualified Data.Map as M
 import Data.Map ((!))
+import Data.Maybe (mapMaybe)
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Debug.Trace
@@ -20,7 +24,7 @@ data Resource
   | Geode
   deriving (Show, Ord, Eq)
 
-resources = [Ore, Clay, Obsidian, Geode]
+types = [Ore, Clay, Obsidian, Geode]
 
 data ResourceMap a =
   ResourceMap
@@ -31,7 +35,7 @@ data ResourceMap a =
     }
   deriving (Ord, Eq, Show)
 
-getter = [rmOre, rmClay, rmObsidian, rmGeode]
+getters = [rmOre, rmClay, rmObsidian, rmGeode]
 
 type RobotCost = ResourceMap Int
 
@@ -43,18 +47,6 @@ data Blueprint =
     , bMap :: ResourceMap RobotCost
     }
   deriving (Show)
-
-data CacheKey =
-  CacheKey
-    { ckResources :: RobotCost
-    , ckRobots :: RobotCost
-    }
-  deriving (Show, Ord, Eq)
-
-initialCacheKey =
-  CacheKey {ckResources = nullMap, ckRobots = ResourceMap 1 0 0 0}
-
-type Cache = [CacheKey]
 
 typToMap :: Resource -> a -> a -> ResourceMap a
 typToMap typ special normal =
@@ -72,6 +64,15 @@ typeToGetter typ =
     Obsidian -> rmObsidian
     Geode -> rmGeode
 
+notNullMap :: RobotCost -> RobotCost -> RobotCost
+notNullMap (ResourceMap 0 0 0 0) a = a
+notNullMap a (ResourceMap 0 0 0 0) = a
+
+union :: (a -> a -> a) -> ResourceMap a -> ResourceMap a -> ResourceMap a
+union f a b = ResourceMap ore clay obsidian geode
+  where
+    [ore, clay, obsidian, geode] = [f (r a) (r b) | r <- getters]
+
 add :: RobotCost -> RobotCost -> RobotCost
 add (ResourceMap a1 b1 c1 d1) (ResourceMap a2 b2 c2 d2) =
   ResourceMap (a1 + a2) (b1 + b2) (c1 + c2) (d1 + d2)
@@ -80,53 +81,8 @@ remove :: RobotCost -> RobotCost -> RobotCost
 remove (ResourceMap a1 b1 c1 d1) (ResourceMap a2 b2 c2 d2) =
   ResourceMap (a1 - a2) (b1 - b2) (c1 - c2) (d1 - d2)
 
-produce :: CacheKey -> CacheKey
-produce ck = ck {ckResources = add (ckResources ck) (ckRobots ck)}
-
-buy :: Blueprint -> Resource -> CacheKey -> CacheKey
-buy bp typ ck =
-  ck
-    { ckResources = remove (ckResources ck) (typeToGetter typ $ bMap bp)
-    , ckRobots = add (ckRobots ck) (typToMap typ 1 0)
-    }
-
-possiblePurchases :: Blueprint -> [Resource] -> CacheKey -> [CacheKey]
-possiblePurchases bp [] ck = []
-possiblePurchases bp (r:esource) ck =
-  (possiblePurchases bp esource ck) ++
-  if minorizes (typeToGetter r $ bMap bp) (ckResources ck)
-    then do
-      let newCk = (buy bp r ck)
-      newCk : (possiblePurchases bp (esource) newCk)
-    else []
-
-optimize :: [CacheKey] -> [CacheKey]
-optimize cks =
-  [ ck
-  | ck@(CacheKey {ckResources = res, ckRobots = rob}) <- cks
-  , not $
-      any
-        (\c ->
-           c /= ck &&
-           minorizes (res) (ckResources c) && minorizes (rob) (ckRobots c))
-        cks
-  ]
-
-runRound :: Blueprint -> Cache -> Cache
-runRound bp cache =
-  traceShow (("RunRound", length cache)) $
-  optimize $
-  L.nub $
-  map produce $
-  concat $ map (\c -> c : (possiblePurchases bp resources c)) $ cache
-
-minorizes :: RobotCost -> RobotCost -> Bool
-minorizes (ResourceMap a1 b1 c1 d1) (ResourceMap a2 b2 c2 d2) =
-  a1 <= a2 && b1 <= b2 && c1 <= c2 && d1 <= d2
-
-isCheaperBlueprint :: Blueprint -> Blueprint -> Bool
-isCheaperBlueprint bp1 bp2 =
-  all (\r -> minorizes (r $ bMap bp1) (r $ bMap bp2)) $ getter
+scalarMult :: Int -> RobotCost -> RobotCost
+scalarMult s (ResourceMap a b c d) = ResourceMap (s * a) (s * b) (s * c) (s * d)
 
 parseResource :: AP.Parser Resource
 parseResource = do
@@ -151,22 +107,11 @@ parseRobot = do
   resources <- AP.sepBy parseCost " and "
   return $ typToMap typ (foldl1 add resources) nullMap
 
-union :: (a -> a -> a) -> ResourceMap a -> ResourceMap a -> ResourceMap a
-union f a b = ResourceMap ore clay obsidian geode
-  where
-    [ore, clay, obsidian, geode] = [f (r a) (r b) | r <- getter]
-
-better :: RobotCost -> RobotCost -> RobotCost
-better a b =
-  if a == nullMap
-    then b
-    else a
-
 parseBlueprint :: AP.Parser Blueprint
 parseBlueprint = do
   number <- "Blueprint " *> AP.decimal <* ": "
   robots <- AP.sepBy parseRobot ". " <* ".\n"
-  return $ Blueprint number $ foldl1 (union (better)) robots
+  return $ Blueprint number $ foldl1 (union notNullMap) robots
 
 parseAll :: String -> [Blueprint]
 parseAll text =
@@ -174,24 +119,92 @@ parseAll text =
     Left a -> error a
     Right b -> b
 
-minimize :: [Blueprint] -> [Blueprint]
-minimize bps =
-  [ bp
-  | bp <- bps
-  , not $ any (\b -> bNumber b /= bNumber bp && isCheaperBlueprint b bp) bps
-  ]
+type Cache = M.Map RobotCost [RobotCost]
 
-bestResult :: Cache -> Int
-bestResult cache = maximum $ map (\ck -> rmGeode $ ckResources ck) cache
+majorizes :: Ord a => ResourceMap a -> ResourceMap a -> Bool
+majorizes (ResourceMap o1 c1 b1 g1) (ResourceMap o2 c2 b2 g2) =
+  o1 >= o2 && c1 >= c2 && b1 >= b2 && g1 >= g2
+
+addToCache :: RobotCost -> RobotCost -> Cache -> Cache
+addToCache robots resources cache = do
+  let existingResources = M.findWithDefault [] robots cache
+  if not $ any (\rc -> rc `majorizes` resources) existingResources
+    then M.insert robots (resources : existingResources) cache
+    else cache
+
+zeroSafeDiv :: Int -> Int -> Int
+zeroSafeDiv a 0 = 100000000
+zeroSafeDiv a b = a `div` b
+
+maxBuyable :: RobotCost -> RobotCost -> Int
+maxBuyable prices resources =
+  minimum $ map (\f -> (zeroSafeDiv `on` f) resources prices) getters
+
+buyMultiple ::
+     ResourceMap RobotCost
+  -> RobotCost
+  -> RobotCost
+  -> Maybe (RobotCost, RobotCost)
+buyMultiple prices resources request = do
+  let totalCosts =
+        foldl1
+          (add)
+          [ (typeToGetter t request) `scalarMult` (typeToGetter t prices)
+          | t <- types
+          ]
+  if resources `majorizes` totalCosts
+    then Just $ (request, resources `remove` totalCosts)
+    else Nothing
+
+candidates ::
+     ResourceMap RobotCost -> RobotCost -> RobotCost -> [(RobotCost, RobotCost)]
+candidates prices robots resources = do
+  let bought =
+        map (\(rob, res) -> (robots `add` rob, robots `add` res)) $
+        mapMaybe (\t -> buyMultiple prices resources (typToMap t 1 0)) types
+  if length bought < length types
+    then (robots, robots `add` resources) : bought
+    else bought
+
+candidates1 ::
+     ResourceMap RobotCost -> RobotCost -> RobotCost -> [(RobotCost, RobotCost)]
+candidates1 prices robots resources = do
+  let bounds@[ore, clay, obs, geode] =
+        [maxBuyable (f prices) resources | f <- getters]
+  let canWait = any (== 0) bounds
+  let bought =
+        mapMaybe
+          (buyMultiple prices resources)
+          [ (ResourceMap o c b g)
+          | o <- [0 .. ore]
+          , c <- [0 .. clay]
+          , b <- [0 .. obs]
+          , g <- [0 .. geode]
+          , canWait || (not $ all (== 0) [o, c, b, g])
+          ]
+  map (\(rob, res) -> (robots `add` rob, res)) bought
+
+runRound :: ResourceMap RobotCost -> Cache -> Cache
+runRound prices cache = do
+  let allCandidates =
+        concat $
+        concat $
+        map (\(rob, ress) -> map (candidates prices rob) ress) $ M.toList cache
+  L.foldl' (\c -> \(rob, res) -> addToCache rob res c) M.empty allCandidates
+
+initialCache :: Cache
+initialCache = M.singleton (typToMap Ore 1 0) [nullMap]
+
+calcCacheValue :: Cache -> Int
+calcCacheValue cache = maximum $ map rmGeode $ concat $ M.elems cache
 
 evalBlueprint :: Blueprint -> Int
-evalBlueprint bp = do
-  let rounds = take 23 $ iterate (runRound bp) $ [initialCacheKey]
-  let lastCache = head $ reverse $ rounds
-  bestResult lastCache
+evalBlueprint (Blueprint {bNumber = number, bMap = prices}) = do
+  let finalCache = (iterate (runRound prices) initialCache) !! 24
+  number * (calcCacheValue finalCache)
 
 run :: IO ()
 run = do
   input <- parseAll <$> readFile "inputs/dec19.txt"
   print $ length input
-  print $ evalBlueprint $ head input
+  print $ sum $ parMap rpar evalBlueprint input
