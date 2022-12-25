@@ -198,13 +198,14 @@ initialCache = M.singleton (typToMap Ore 1 0) [nullMap]
 calcCacheValue :: Cache -> Int
 calcCacheValue cache = maximum $ map rmGeode $ concat $ M.elems cache
 
-evalBlueprint :: Blueprint -> Int
-evalBlueprint (Blueprint {bNumber = number, bMap = prices}) = do
-  let finalCache = (iterate (runRound prices) initialCache) !! 24
-  number * (calcCacheValue finalCache)
+evalBlueprint :: Int -> Blueprint -> (Int, Int)
+evalBlueprint steps (Blueprint {bNumber = number, bMap = prices}) = do
+  let finalCache = (iterate (runRound prices) initialCache) !! steps
+  (number , calcCacheValue finalCache)
 
 run :: IO ()
 run = do
   input <- parseAll <$> readFile "inputs/dec19.txt"
   print $ length input
-  print $ sum $ parMap rpar evalBlueprint input
+  print $ sum $ map (uncurry (*)) $ parMap rpar (evalBlueprint 24) input
+  print $ product $ map snd $ parMap rpar (evalBlueprint 32) $ take 3 input
